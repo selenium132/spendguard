@@ -109,8 +109,7 @@ Built on 2026-10-02, inside the submission period, from an empty folder. Works i
   early capture; the approval page itself was not driven.
 - Replay fixtures are still hand-written, but were corrected to match the real response shapes.
 
-Remaining before submission: record the demo video from the live screens, push the repository to its
-public home (see `submit_steps.md`).
+Demo video (2:45, unlisted on YouTube): https://youtu.be/VJlUQvbI36g , recorded from the live sandbox run.
 
 ## Why this idea
 
@@ -127,5 +126,5 @@ scope and checks the results. The design, code and tests were produced in that w
 
 ## License
 
-MIT, see `LICENSE`. This project is not affiliated with or endorsed by PayPal. "PayPal" is a
+MIT, see `LICENSE` (full text at the repository root). This project is not affiliated with or endorsed by PayPal. "PayPal" is a
 trademark of its owner and is used here only to name the API.
