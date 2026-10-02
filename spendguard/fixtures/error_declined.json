@@ -1,0 +1,1 @@
+{"name": "UNPROCESSABLE_ENTITY", "message": "The requested action could not be performed, semantically incorrect, or failed business validation.", "debug_id": "replay-debug-id", "details": [{"issue": "INSTRUMENT_DECLINED", "description": "The instrument presented was either declined by the processor or bank, or it can't be used for this payment."}]}

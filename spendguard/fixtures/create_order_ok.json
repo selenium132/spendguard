@@ -1,0 +1,10 @@
+{
+  "id": "{{order_id}}",
+  "status": "PAYER_ACTION_REQUIRED",
+  "payment_source": {"paypal": {}},
+  "purchase_units": [{"reference_id": "{{reference}}", "amount": {"currency_code": "{{currency}}", "value": "{{value}}"}, "description": "{{description}}"}],
+  "links": [
+    {"href": "https://api-m.sandbox.paypal.com/v2/checkout/orders/{{order_id}}", "rel": "self", "method": "GET"},
+    {"href": "https://www.sandbox.paypal.com/checkoutnow?token={{order_id}}", "rel": "payer-action", "method": "GET"}
+  ]
+}

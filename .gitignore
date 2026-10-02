@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+shots/
+raw/
+submit_steps.md
+rules_quote.md
+video_script.md
+devpost_text.md

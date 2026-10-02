@@ -1,0 +1,7 @@
+{
+  "id": "{{order_id}}",
+  "status": "COMPLETED",
+  "purchase_units": [{"reference_id": "{{reference}}", "payments": {"captures": [
+    {"id": "{{capture_id}}", "status": "COMPLETED", "amount": {"currency_code": "{{currency}}", "value": "{{value}}"}, "final_capture": true}
+  ]}}]
+}

@@ -1,0 +1,1 @@
+{"scope": "https://uri.paypal.com/services/payments/payment", "access_token": "REPLAY-ACCESS-TOKEN", "token_type": "Bearer", "app_id": "REPLAY-APP", "expires_in": 32400, "nonce": "replay"}
