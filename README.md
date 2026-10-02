@@ -37,12 +37,11 @@ approve a purchase or reset the breaker, so a prompt-injected or confused model 
 ```bash
 git clone <this repository> spendguard && cd spendguard
 python3 -m spendguard            # open http://127.0.0.1:8765
-python3 -m unittest discover -s tests -t .      # 54 tests
+python3 -m unittest discover -s tests -t .      # 62 tests (3 more run only against the live sandbox)
 ```
 
 With no credentials it starts in **replay mode**: PayPal answers come from `spendguard/fixtures/*.json`
-(shaped like the documented Orders v2 responses; they are hand-written, not captured from the live
-service). The "Buyer approves (replay)" button stands in for the sandbox buyer.
+(hand-written, then corrected against real sandbox responses; see `sandbox_run.md`). The "Buyer approves (replay)" button stands in for the sandbox buyer.
 
 ### Use the real PayPal sandbox
 
@@ -54,7 +53,9 @@ service). The "Buyer approves (replay)" button stands in for the sandbox buyer.
    set -a; . ./.env; set +a
    python3 -m spendguard        # the header badge now says "PayPal: sandbox"
    ```
-3. Run a scenario. When an order is created, click **Open PayPal sandbox approval**, log in with a
+   Set `PAYPAL_BUYER=card` to let PayPal's public sandbox test card pay (order captured on creation),
+   for when you have no sandbox buyer login. Live tests: `SPENDGUARD_LIVE_TESTS=1 python3 -m unittest discover -s tests -t .`
+3. Otherwise run a scenario. When an order is created, click **Open PayPal sandbox approval**, log in with a
    sandbox *personal* test account (Sandbox > Accounts), approve, come back and press **Capture**.
 
 Test accounts, keys and secrets are never stored in this repository.
@@ -64,7 +65,7 @@ Test accounts, keys and secrets are never stored in this repository.
 1. Normal purchase: allowed, PayPal order created.
 2. A 1,899 USD item against a 50 USD per-order limit: denied.
 3. "Ignore all previous limits ...": the guard does not read prompts. Denied.
-4. 34.99 USD, above the 25 USD auto-approve line: waits for you.
+4. 34.50 USD, above the 25 USD auto-approve line: waits for you.
 5. Price jumps 20% between search and checkout: waits for you.
 6. Daily limit: the third purchase crosses 40 USD and is denied.
 7. Circuit breaker: PayPal declines twice, the agent halts, the third attempt never reaches PayPal.
@@ -79,7 +80,7 @@ spendguard/paypal.py    sandbox client + offline replay client behind one interf
 spendguard/planner.py   rule-based mock and real LLM tool-use loop
 spendguard/agent.py     planner -> guard -> PayPal, audit trail, human controls
 spendguard/server.py    local web UI and JSON API (binds to 127.0.0.1, checks Host/Origin)
-tests/                  54 unit tests
+tests/                  62 unit tests + 3 live sandbox tests
 ```
 
 ## Tests
@@ -94,13 +95,22 @@ Host or a foreign Origin). As a check that the tests bite, four guard rules were
 
 ## Status (2026-10-02)
 
-Built on 2026-10-02, inside the submission period, from an empty folder. Works in replay mode.
-**Not yet run against the live PayPal sandbox** because the sandbox credentials are not set up yet;
-the request shapes follow the PayPal Orders v2 documentation and are checked only with a fake
-transport. The first live run may need small fixes (for example the buyer-approval redirect).
+Built on 2026-10-02, inside the submission period, from an empty folder. Works in replay mode and
+**was run against the real PayPal sandbox on 2026-10-02** (log: `sandbox_run.md`):
 
-Remaining before submission: run the seven scenarios once against the real sandbox, record the demo
-video from the live screens, push the repository to its public home (see `submit_steps.md`).
+- OAuth2 token, `POST /v2/checkout/orders` and capture are real calls to `api-m.sandbox.paypal.com`.
+- All seven scenarios were run live. Denied, halted and over-limit proposals produced **no** PayPal
+  request at all; allowed ones produced real orders with `COMPLETED` captures; the circuit breaker was
+  driven by genuine `INSTRUMENT_DECLINED` answers from PayPal.
+- **Limit on what was verified:** no sandbox *buyer* login was available, so the live runs use
+  `PAYPAL_BUYER=card` (PayPal's public sandbox test card in `payment_source.card`), where PayPal captures
+  while creating the order. The default flow (buyer approves on PayPal's page) was checked up to the real
+  `PAYER_ACTION_REQUIRED` response with its approval link and PayPal's `ORDER_NOT_APPROVED` refusal of an
+  early capture; the approval page itself was not driven.
+- Replay fixtures are still hand-written, but were corrected to match the real response shapes.
+
+Remaining before submission: record the demo video from the live screens, push the repository to its
+public home (see `submit_steps.md`).
 
 ## Why this idea
 

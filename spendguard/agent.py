@@ -7,7 +7,7 @@ import time
 
 from . import shop
 from .guard import ALLOW, NEEDS_APPROVAL, DENY, HALT, Guard, Proposal
-from .paypal import PayPalError, approve_url
+from .paypal import PayPalError, approve_url, captured_cents
 from .policy import fmt
 
 
@@ -82,6 +82,16 @@ class Shopper:
                 self.log("halt", f"HALTED: {self.guard.halt_reason}")
             return {"status": "failed", "reasons": [e.issue], "halted": self.guard.halted}
         oid = order["id"]
+        if order.get("status") == "COMPLETED" and captured_cents(order) == p.total_cents:
+            # card buyer: PayPal captured the order while creating it (no separate approval step)
+            with self._lock:
+                self.orders[oid] = {"order_id": oid, "proposal": p, "reservation": reservation,
+                                    "state": "paid", "approve_url": None}
+            self.guard.ledger.commit(reservation)
+            self.guard.record_success()
+            self.log("order_created", f"PayPal order {oid} created for {fmt(p.total_cents, p.currency)}", order_id=oid)
+            self.log("paid", f"captured {fmt(p.total_cents, p.currency)} for order {oid} (test card)", order_id=oid)
+            return {"status": "paid", "order_id": oid}
         with self._lock:
             self.orders[oid] = {"order_id": oid, "proposal": p, "reservation": reservation,
                                 "state": "awaiting_buyer", "approve_url": approve_url(order)}

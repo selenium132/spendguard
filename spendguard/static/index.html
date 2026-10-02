@@ -19,7 +19,7 @@ label{display:flex;justify-content:space-between;align-items:center;gap:8px;marg
 input[type=number],input[type=text]{font:inherit;padding:5px 7px;border:1px solid var(--line);border-radius:6px;width:110px}
 input[type=text]{width:100%}.row{display:flex;gap:8px}
 .bar{height:12px;background:#e8ecf1;border-radius:6px;overflow:hidden;margin:6px 0}.bar i{display:block;height:100%;background:var(--acc)}
-.halt{background:#f3e5f5;border:1px solid var(--halt);color:var(--halt);border-radius:8px;padding:10px;margin-bottom:14px;display:none}
+#halt{background:#f3e5f5;border:1px solid var(--halt);color:var(--halt);border-radius:8px;padding:10px;margin-bottom:14px;display:none}
 .ev{border-left:4px solid var(--line);padding:6px 10px;margin:6px 0;background:#fafbfc;border-radius:0 6px 6px 0;font-size:14px}
 .ev b{display:inline-block;min-width:140px;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
 .ev.deny{border-color:var(--bad)}.ev.deny b{color:var(--bad)}.ev.halt{border-color:var(--halt)}.ev.halt b{color:var(--halt)}
@@ -39,7 +39,7 @@ input[type=text]{width:100%}.row{display:flex;gap:8px}
   <button class="primary" onclick="savePolicy()" style="margin-top:8px">Save policy</button><div id="perr" style="color:var(--bad);font-size:13px"></div></div>
 </div>
 <div>
- <div class="halt" id="halt"><b>Agent halted.</b> <span id="haltwhy"></span> <button onclick="post('/api/reset_halt')">Reset (human)</button></div>
+ <div id="halt"><b>Agent halted.</b> <span id="haltwhy"></span> <button onclick="post('/api/reset_halt')">Reset (human)</button></div>
  <div class="card"><h2>Ask the agent</h2><div class="row"><input type="text" id="task" value="buy a desk lamp and 2 mouse" aria-label="task">
   <button class="primary" onclick="runTask()">Run</button></div>
   <div style="margin-top:10px"><div id="spent"></div><div class="bar"><i id="spentbar" style="width:0"></i></div></div></div>

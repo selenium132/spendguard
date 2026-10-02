@@ -1,4 +1,5 @@
 import json
+import os
 import unittest
 
 from spendguard import paypal, planner, shop
@@ -69,11 +70,11 @@ class ShopperFlowTests(unittest.TestCase):
 
     def test_approval_is_rechecked_against_hard_limits(self):
         s, pp = make(daily_limit=5000, per_merchant_daily_limit=5000)
-        r = s.purchase("desk-lamp", 1)                        # 34.99 waiting for a human
+        r = s.purchase("desk-lamp", 1)                        # 34.50 waiting for a human
         self.assertEqual(r["status"], "needs_approval")
         s.purchase("notebook-3pack", 1)
         s.purchase("mouse", 1)                                # 8.99 + 21.99 = 30.98 used
-        out = s.approve(r["approval_id"])                    # 30.98 + 34.99 > 50.00
+        out = s.approve(r["approval_id"])                    # 30.98 + 34.50 > 50.00
         self.assertEqual(out["status"], "deny")
         self.assertEqual([c for c in pp.calls if c[1].startswith("lumen")], [])
 
@@ -216,7 +217,78 @@ class PayPalLayerTests(unittest.TestCase):
     def test_replay_money_format(self):
         pp = paypal.ReplayPayPal()
         o = pp.create_order("m:x", 5, "USD", "d")
-        self.assertEqual(o["purchase_units"][0]["amount"]["value"], "0.05")
+        self.assertEqual(pp._orders[o["id"]]["cents"], 5)
+        self.assertEqual(paypal._value(5), "0.05")
+
+    def test_captured_cents(self):
+        order = {"purchase_units": [{"payments": {"captures": [
+            {"status": "COMPLETED", "amount": {"currency_code": "USD", "value": "12.99"}}]}}]}
+        self.assertEqual(paypal.captured_cents(order), 1299)
+        self.assertIsNone(paypal.captured_cents({"purchase_units": [{}]}))
+
+    def _card_transport(self, calls, amount="12.99", decline=False):
+        def transport(method, url, headers, data):
+            if url.endswith("/oauth2/token"):
+                return 200, {"access_token": "t"}
+            calls.append((url, headers, json.loads(data)))
+            if "PayPal-Mock-Response" in headers:
+                return 422, {"details": [{"issue": "INSTRUMENT_DECLINED"}]}
+            return 201, {"id": "ORD1", "status": "COMPLETED", "purchase_units": [{"payments": {"captures": [
+                {"status": "COMPLETED", "amount": {"currency_code": "USD", "value": amount}}]}}]}
+        return transport
+
+    def test_card_buyer_pays_on_create(self):
+        calls = []
+        pp = paypal.SandboxPayPal("a", "b", transport=self._card_transport(calls), buyer="card")
+        s = Shopper(Guard(Policy()), pp)
+        r = s.purchase("usb-c-cable", 1)
+        self.assertEqual(r["status"], "paid")
+        self.assertEqual(calls[0][2]["payment_source"]["card"]["number"], "4005519200000004")
+        self.assertEqual(s.guard.ledger.spent_today(), 1299)
+
+    def test_card_buyer_amount_mismatch_is_not_paid(self):
+        calls = []
+        pp = paypal.SandboxPayPal("a", "b", transport=self._card_transport(calls, amount="1.00"), buyer="card")
+        s = Shopper(Guard(Policy()), pp)
+        self.assertNotEqual(s.purchase("usb-c-cable", 1)["status"], "paid")
+
+    def test_card_buyer_mock_decline_for_flaky_store(self):
+        calls = []
+        pp = paypal.SandboxPayPal("a", "b", transport=self._card_transport(calls), buyer="card")
+        s = Shopper(Guard(Policy()), pp)
+        self.assertEqual(s.purchase("flaky-gadget", 1)["status"], "failed")
+
+    def test_bad_buyer_mode(self):
+        with self.assertRaises(ValueError):
+            paypal.SandboxPayPal("a", "b", buyer="x")
+
+
+@unittest.skipUnless(os.environ.get("PAYPAL_CLIENT_ID") and os.environ.get("PAYPAL_CLIENT_SECRET")
+                     and os.environ.get("SPENDGUARD_LIVE_TESTS") == "1",
+                     "live sandbox test: needs PAYPAL_CLIENT_ID/SECRET and SPENDGUARD_LIVE_TESTS=1")
+class LiveSandboxTests(unittest.TestCase):
+    def setUp(self):
+        self.pp = paypal.SandboxPayPal(os.environ["PAYPAL_CLIENT_ID"], os.environ["PAYPAL_CLIENT_SECRET"],
+                                       buyer="card")
+
+    def test_paid_order_is_captured(self):
+        s = Shopper(Guard(Policy()), self.pp)
+        r = s.purchase("usb-c-cable", 1)
+        self.assertEqual(r["status"], "paid")
+        self.assertEqual(s.guard.ledger.spent_today(), 1299)
+
+    def test_over_limit_never_reaches_paypal(self):
+        pp = self.pp
+        calls = []
+        orig = pp.create_order
+        pp.create_order = lambda *a, **k: (calls.append(a), orig(*a, **k))[1]
+        s = Shopper(Guard(Policy()), pp)
+        self.assertEqual(s.purchase("gpu-pro", 1)["status"], "deny")
+        self.assertEqual(calls, [])
+
+    def test_real_decline_counts_toward_breaker(self):
+        s = Shopper(Guard(Policy()), self.pp)
+        self.assertEqual(s.purchase("flaky-gadget", 1)["status"], "failed")
 
 
 class ShopTests(unittest.TestCase):

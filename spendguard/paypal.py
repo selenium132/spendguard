@@ -41,6 +41,18 @@ def _value(cents: int) -> str:
     return f"{cents // 100}.{cents % 100:02d}"
 
 
+def captured_cents(order: dict) -> int | None:
+    """Total of COMPLETED captures inside an order response, or None if there are none."""
+    total, found = 0, False
+    for pu in order.get("purchase_units", []):
+        for cap in pu.get("payments", {}).get("captures", []):
+            if cap.get("status") == "COMPLETED":
+                found = True
+                whole, _, frac = cap["amount"]["value"].partition(".")
+                total += int(whole) * 100 + int((frac + "00")[:2])
+    return total if found else None
+
+
 def approve_url(order: dict) -> str | None:
     for link in order.get("links", []):
         if link.get("rel") in ("payer-action", "approve"):
@@ -95,7 +107,19 @@ class ReplayPayPal:
 class SandboxPayPal:
     mode = "sandbox"
 
-    def __init__(self, client_id: str, client_secret: str, transport=None):
+    # PayPal's public sandbox test card (developer.paypal.com/tools/sandbox/card-testing/)
+    TEST_CARD = {"number": "4005519200000004", "expiry": "2030-12", "security_code": "123",
+                 "name": "Sandbox Buyer"}
+
+    def __init__(self, client_id: str, client_secret: str, transport=None, buyer: str = "paypal",
+                 mock_decline_references: tuple = ("flaky-store",)):
+        """buyer="paypal": order waits for a sandbox buyer to approve on PayPal's page (PAYER_ACTION_REQUIRED).
+        buyer="card": the order carries PayPal's public test card, so PayPal captures it on creation
+        (status COMPLETED). Needed when no sandbox buyer login is available."""
+        if buyer not in ("paypal", "card"):
+            raise ValueError("buyer must be 'paypal' or 'card'")
+        self.buyer = buyer
+        self.mock_decline_references = mock_decline_references
         if not client_id or not client_secret:
             raise ValueError("PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET are required for sandbox mode")
         self._id, self._secret = client_id, client_secret
@@ -129,9 +153,10 @@ class SandboxPayPal:
         self._token = body["access_token"]
         return self._token
 
-    def _call(self, method: str, path: str, payload: dict | None, request_id: str | None):
+    def _call(self, method: str, path: str, payload: dict | None, request_id: str | None,
+              extra_headers: dict | None = None):
         headers = {"Authorization": f"Bearer {self._auth()}", "Content-Type": "application/json",
-                   "PayPal-Request-Id": request_id or str(uuid.uuid4())}
+                   "PayPal-Request-Id": request_id or str(uuid.uuid4()), **(extra_headers or {})}
         data = json.dumps(payload).encode() if payload is not None else None
         status, body = self._transport(method, self.base + path, headers, data)
         if status == 401:  # token expired once: refresh and retry
@@ -151,12 +176,19 @@ class SandboxPayPal:
                 "description": description[:127],
                 "amount": {"currency_code": currency, "value": _value(cents)},
             }],
-            "payment_source": {"paypal": {"experience_context": {
+        }
+        if self.buyer == "card":
+            payload["payment_source"] = {"card": dict(self.TEST_CARD)}
+        else:
+            payload["payment_source"] = {"paypal": {"experience_context": {
                 "user_action": "PAY_NOW",
                 "return_url": "http://localhost:8765/paypal/return",
-                "cancel_url": "http://localhost:8765/paypal/cancel"}}},
-        }
-        return self._call("POST", "/v2/checkout/orders", payload, request_id)
+                "cancel_url": "http://localhost:8765/paypal/cancel"}}}
+        extra = None
+        if self.buyer == "card" and any(reference_id.startswith(d) for d in self.mock_decline_references):
+            # PayPal's documented negative-testing header: the sandbox answers with a genuine INSTRUMENT_DECLINED
+            extra = {"PayPal-Mock-Response": json.dumps({"mock_application_codes": "INSTRUMENT_DECLINED"})}
+        return self._call("POST", "/v2/checkout/orders", payload, request_id, extra)
 
     def capture_order(self, order_id: str, request_id: str | None = None) -> dict:
         return self._call("POST", f"/v2/checkout/orders/{order_id}/capture", {}, request_id)
@@ -166,5 +198,6 @@ def from_env(env=None):
     """Sandbox if both credentials are set (and PAYPAL_MODE != replay), otherwise replay."""
     env = os.environ if env is None else env
     if env.get("PAYPAL_MODE", "").lower() != "replay" and env.get("PAYPAL_CLIENT_ID") and env.get("PAYPAL_CLIENT_SECRET"):
-        return SandboxPayPal(env["PAYPAL_CLIENT_ID"], env["PAYPAL_CLIENT_SECRET"])
+        return SandboxPayPal(env["PAYPAL_CLIENT_ID"], env["PAYPAL_CLIENT_SECRET"],
+                             buyer=env.get("PAYPAL_BUYER", "paypal").lower())
     return ReplayPayPal()
