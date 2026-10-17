@@ -299,3 +299,54 @@ class ShopTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GeminiPlannerTests(unittest.TestCase):
+    """No network: the transport returns canned Gemini responses."""
+
+    def test_function_call_loop_and_response_shape(self):
+        sent = []
+        script = iter([
+            {"candidates": [{"content": {"role": "model", "parts": [
+                {"functionCall": {"name": "search_shop", "args": {"query": "mouse"}}},
+                {"functionCall": {"name": "purchase", "args": {"sku": "mouse", "quantity": 1}}}]}}]},
+            {"candidates": [{"content": {"role": "model", "parts": [{"text": "done"}]}}]},
+        ])
+
+        def transport(payload):
+            sent.append(payload)
+            return next(script)
+        calls = []
+
+        def execute(name, args):
+            calls.append((name, args))
+            return {"decision": "allow"}
+        gp = planner.GeminiPlanner("test-key", transport=transport)
+        res = gp.run("buy a mouse", execute)
+        self.assertEqual(calls, [("search_shop", {"query": "mouse"}), ("purchase", {"sku": "mouse", "quantity": 1})])
+        self.assertEqual(res, [{"decision": "allow"}])
+        names = [d["name"] for d in sent[0]["tools"][0]["functionDeclarations"]]
+        self.assertEqual(names, ["search_shop", "purchase"])   # no tool to change policy or approve
+        fr = sent[1]["contents"][-2]["parts"][0]["functionResponse"]
+        self.assertEqual(fr["name"], "search_shop")
+
+    def test_unknown_tool_not_executed_and_empty_response_ends(self):
+        calls = []
+        script = iter([{"candidates": [{"content": {"parts": [
+            {"functionCall": {"name": "set_policy", "args": {"daily_limit": 999999}}}]}}]}, {}])
+        gp = planner.GeminiPlanner("k", transport=lambda p: next(script))
+        self.assertEqual(gp.run("x", lambda n, a: calls.append(n)), [])
+        self.assertEqual(calls, [])
+
+    def test_max_turns(self):
+        gp = planner.GeminiPlanner("k", max_turns=2, transport=lambda p: {"candidates": [{"content": {"parts": [
+            {"functionCall": {"name": "search_shop", "args": {"query": "a"}}}]}}]})
+        n = []
+        gp.run("x", lambda a, b: n.append(1) or {})
+        self.assertEqual(len(n), 2)
+
+    def test_from_env_order(self):
+        self.assertIsInstance(planner.from_env({"GEMINI_API_KEY": "g"}), planner.GeminiPlanner)
+        self.assertIsInstance(planner.from_env({"GEMINI_API_KEY": "g", "ANTHROPIC_API_KEY": "a"}), planner.LLMPlanner)
+        self.assertIsInstance(planner.from_env({"GEMINI_API_KEY": "g", "SPENDGUARD_PLANNER": "mock"}),
+                              planner.RuleBasedPlanner)

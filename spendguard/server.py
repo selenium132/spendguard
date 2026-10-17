@@ -142,6 +142,9 @@ def make_handler(app: App, port: int):
                 return self._send(200, app.state())
             if p in ("/", "/index.html"):
                 return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
+            if p == "/compare":   # demo only: offline guard OFF vs ON table (replay numbers)
+                from . import compare
+                return self._send(200, compare.render_html(compare.run_all()).encode(), "text/html; charset=utf-8")
             if p in ("/paypal/return", "/paypal/cancel"):
                 return self._send(200, b"<p>Back from PayPal sandbox. You can close this tab and press "
                                        b"Capture in SpendGuard.</p>", "text/html; charset=utf-8")

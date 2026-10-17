@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 
@@ -100,8 +101,65 @@ class LLMPlanner:
         return results
 
 
+class GeminiPlanner:
+    """Real LLM via the Gemini generateContent function-calling loop (needs GEMINI_API_KEY).
+    Same contract as LLMPlanner: it only proposes tool calls; the guard decides.
+    `transport(payload) -> dict` is injectable for tests. The key goes in a header, never in logs."""
+
+    def __init__(self, api_key: str, model: str = "gemini-3.5-flash", transport=None, max_turns: int = 8):
+        self.api_key, self.model, self.max_turns = api_key, model, max_turns
+        self._transport = transport or self._http
+        self.name = f"LLM function-calling ({model})"
+        self.decls = [{"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}
+                      for t in TOOLS]
+
+    def _http(self, payload: dict) -> dict:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        data = json.dumps(payload).encode()
+        for attempt in range(5):
+            req = urllib.request.Request(url, data=data, method="POST", headers={
+                "x-goog-api-key": self.api_key, "content-type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    return json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                if e.code in (429, 503) and attempt < 4:
+                    time.sleep(4 * (attempt + 1))
+                    continue
+                raise RuntimeError(f"LLM API error {e.code}") from None
+
+    def run(self, task: str, execute) -> list:
+        contents = [{"role": "user", "parts": [{"text": task}]}]
+        results = []
+        for _ in range(self.max_turns):
+            resp = self._transport({"systemInstruction": {"parts": [{"text": SYSTEM}]},
+                                    "tools": [{"functionDeclarations": self.decls}],
+                                    "contents": contents,
+                                    "generationConfig": {"temperature": 0}})
+            cands = resp.get("candidates") or []
+            content = (cands[0].get("content") if cands else None) or {}
+            parts = content.get("parts") or []
+            contents.append({"role": "model", "parts": parts})
+            calls = [p["functionCall"] for p in parts if "functionCall" in p]
+            if not calls:
+                break
+            out = []
+            for c in calls:
+                if c.get("name") not in ("search_shop", "purchase"):
+                    res = {"error": "unknown tool"}
+                else:
+                    res = execute(c["name"], c.get("args") or {})
+                    if c["name"] == "purchase":
+                        results.append(res)
+                out.append({"functionResponse": {"name": c.get("name", ""), "response": {"result": res}}})
+            contents.append({"role": "user", "parts": out})
+        return results
+
+
 def from_env(env) -> object:
-    key = env.get("ANTHROPIC_API_KEY")
-    if key and env.get("SPENDGUARD_PLANNER", "").lower() != "mock":
-        return LLMPlanner(key, env.get("SPENDGUARD_LLM_MODEL", "claude-sonnet-5-5"))
+    if env.get("SPENDGUARD_PLANNER", "").lower() != "mock":
+        if env.get("ANTHROPIC_API_KEY"):
+            return LLMPlanner(env["ANTHROPIC_API_KEY"], env.get("SPENDGUARD_LLM_MODEL", "claude-sonnet-5-5"))
+        if env.get("GEMINI_API_KEY"):
+            return GeminiPlanner(env["GEMINI_API_KEY"], env.get("SPENDGUARD_LLM_MODEL", "gemini-3.5-flash"))
     return RuleBasedPlanner()

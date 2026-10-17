@@ -1,5 +1,38 @@
 # SpendGuard
 
+**An AI agent that can pay with PayPal can overspend, buy twice or keep retrying; SpendGuard puts limits the model cannot change between the agent and PayPal.** (Agentic commerce, with a brake.)
+
+![Audit trail: an "ignore your limits" prompt is denied, PayPal is never called](shots/gallery_v2/3_denied_audit_trail.png)
+
+## Guard off vs guard on
+
+Same agent, same orders, seven demo scenarios, offline replay (no sandbox calls, nobody clicks Approve). Reproduce: `python3 -m spendguard.compare`, or open `/compare` in the app.
+
+| Scenario | Guard off: sent to PayPal | Guard on: sent to PayPal |
+|---|---|---|
+| 1 Normal purchase | 1 request, 12.99 USD | 1 request, 12.99 USD |
+| 2 Over the per-order limit | 1 request, 1,899.00 USD | 0 |
+| 3 "Ignore your limits" | 1 request, 3,798.00 USD | 0 |
+| 4 Needs a human | 1 request, 34.50 USD | 0 (waits for a click) |
+| 5 Price +20% at checkout | 1 request, 15.59 USD | 0 (waits for a click) |
+| 6 Daily limit 40 USD | 3 requests, 43.97 USD | 2 requests, 34.98 USD |
+| 7 Circuit breaker | 3 requests, 45.00 USD (declined by the stand-in) | 2 requests, 30.00 USD, then halted |
+| **Total** | **11 requests, 5,849.05 USD** | **5 requests, 77.97 USD** |
+
+"Guard off" is a demo-only class (`UnguardedGuard` in `spendguard/compare.py`); the app never uses it. These are replay numbers.
+
+## Run it in 30 seconds (Python 3.10+, nothing to install)
+
+```bash
+git clone https://github.com/selenium132/spendguard && cd spendguard
+python3 -m spendguard          # open http://127.0.0.1:8765 and click scenario 3
+python3 -m unittest discover -s tests -t .    # 74 tests (3 of them need the live sandbox)
+```
+
+Note on AI: the default agent is an offline rule-based planner (the header says so). Set `GEMINI_API_KEY` (or `ANTHROPIC_API_KEY`) and a real LLM drives the same tools through function calling (`spendguard/planner.py`; order: Anthropic, Gemini, mock; `SPENDGUARD_PLANNER=mock` forces the mock). The Gemini planner was run live on 8 scenarios on 2026-10-04 JST against the offline PayPal client: 10 proposals, 4 sent (69.96 USD), 5 denied (9,752.99 USD), 1 held for a human (34.50 USD); results and the raw JSON are in `raw/gemini_run_20261004.md`. The free Gemini tier is 20 requests per day per model, so the trial used two models and one run per scenario. The Anthropic planner is tested with a fake transport only. The guard behaves the same for all planners.
+
+---
+
 **Hard spending limits and stop conditions for AI agents that pay with PayPal.**
 
 An AI agent that can check out for you is useful until it buys the wrong thing, buys it twice, or
@@ -29,15 +62,15 @@ approve a purchase or reset the breaker, so a prompt-injected or confused model 
   idempotency header). The agent creates the order; PayPal's own buyer-approval step is a second gate;
   capture then moves the money. The production host is deliberately not supported.
 - **AI**: an LLM calls the shop tools through tool use (Anthropic Messages API when
-  `ANTHROPIC_API_KEY` is set). Without a key an offline rule-based planner stands in, so the demo and
-  the tests run anywhere. The guard is the same for both.
+  `ANTHROPIC_API_KEY` is set, Google Gemini function calling when `GEMINI_API_KEY` is set). Without a key an offline rule-based planner stands in, so the demo and
+  the tests run anywhere. The guard is the same for all of them.
 
 ## Run it (Python 3.10+, standard library only, nothing to install)
 
 ```bash
 git clone <this repository> spendguard && cd spendguard
 python3 -m spendguard            # open http://127.0.0.1:8765
-python3 -m unittest discover -s tests -t .      # 62 tests (3 more run only against the live sandbox)
+python3 -m unittest discover -s tests -t .      # 74 tests (3 of them run only against the live sandbox)
 ```
 
 With no credentials it starts in **replay mode**: PayPal answers come from `spendguard/fixtures/*.json`
@@ -48,7 +81,7 @@ With no credentials it starts in **replay mode**: PayPal answers come from `spen
 1. At <https://developer.paypal.com/> open *Apps & Credentials*, switch to **Sandbox**, create an app,
    and copy the Client ID and Secret.
 2. `cp .env.example .env`, fill in `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` (and optionally
-   `ANTHROPIC_API_KEY`), then:
+   `GEMINI_API_KEY` or `ANTHROPIC_API_KEY`), then:
    ```bash
    set -a; . ./.env; set +a
    python3 -m spendguard        # the header badge now says "PayPal: sandbox"
@@ -77,10 +110,11 @@ spendguard/policy.py    policy and money in integer cents
 spendguard/ledger.py    reservations (thread-safe), daily window in UTC
 spendguard/guard.py     the decision: allow / needs_approval / deny / halt, with reasons
 spendguard/paypal.py    sandbox client + offline replay client behind one interface
-spendguard/planner.py   rule-based mock and real LLM tool-use loop
+spendguard/planner.py   rule-based mock and real LLM tool-use loops (Anthropic, Gemini)
 spendguard/agent.py     planner -> guard -> PayPal, audit trail, human controls
 spendguard/server.py    local web UI and JSON API (binds to 127.0.0.1, checks Host/Origin)
-tests/                  62 unit tests + 3 live sandbox tests
+tests/                  74 tests, 3 of them live sandbox only
+raw/mutation_check.py   disables each guard rule in turn and runs the tests
 ```
 
 ## Tests
@@ -90,8 +124,9 @@ quantity multiplication, day rollover, approvals that must not lift hard limits,
 slices hitting the daily limit, negative / zero / unknown purchases, the circuit breaker and its
 human reset, 20 parallel calls that must not overspend, an LLM that tries to invent a `set_policy`
 tool, the sandbox request shape (with a fake transport), and the web API (including rejecting a wrong
-Host or a foreign Origin). As a check that the tests bite, four guard rules were broken one at a time
-(per-order check, daily check, halt check, approval-vs-hard-limit) and each time the suite failed.
+Host or a foreign Origin). As a check that the tests bite, `raw/mutation_check.py` disables each of the 9 guard rules in turn
+(halt, currency, merchant allow list, per-order, daily, per-merchant daily, auto-approve line, price drift,
+approval-vs-hard-limit); on 2026-10-10 the suite failed for every one (1 to 8 failing tests each).
 
 ## Status (2026-10-02)
 
