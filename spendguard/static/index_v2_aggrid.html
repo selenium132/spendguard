@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SpendGuard</title>
+<!-- Added for the AG Grid Community sponsor-tool integration (2026-11-05). Everything else below is
+     unchanged from static/index.html; only the Audit trail card and its render() lines differ. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.2/styles/ag-grid.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.2/styles/ag-theme-quartz.css">
+<script src="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.2/dist/ag-grid-community.min.js"></script>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#16202a;--mute:#5b6773;--line:#dde2e8;--ok:#1a7f4b;--warn:#a66300;--bad:#b3261e;--halt:#6a1b9a;--acc:#0b5cd5}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{background:#102a43;color:#fff;padding:14px 24px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+header h1{font-size:20px;margin:0}header .sub{opacity:.8;font-size:13px}
+.badge{background:#ffffff22;border-radius:12px;padding:2px 10px;font-size:12px}
+main{max-width:1180px;margin:0 auto;padding:18px;display:grid;grid-template-columns:340px 1fr;gap:18px}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:16px}
+.card h2{font-size:14px;text-transform:uppercase;letter-spacing:.04em;color:var(--mute);margin:0 0 10px}
+button{font:inherit;border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 11px;cursor:pointer}
+button:hover{border-color:var(--acc)}button.primary{background:var(--acc);color:#fff;border-color:var(--acc)}
+button.ok{background:var(--ok);color:#fff;border-color:var(--ok)}button.bad{background:#fff;color:var(--bad);border-color:var(--bad)}
+.scen{display:block;width:100%;text-align:left;margin-bottom:6px}.scen small{display:block;color:var(--mute)}
+label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:5px 0;font-size:13px}
+input[type=number],input[type=text]{font:inherit;padding:5px 7px;border:1px solid var(--line);border-radius:6px;width:110px}
+input[type=text]{width:100%}.row{display:flex;gap:8px}
+.bar{height:12px;background:#e8ecf1;border-radius:6px;overflow:hidden;margin:6px 0}.bar i{display:block;height:100%;background:var(--acc)}
+#halt{background:#f3e5f5;border:1px solid var(--halt);color:var(--halt);border-radius:8px;padding:10px;margin-bottom:14px;display:none}
+.item{border:1px solid var(--line);border-radius:8px;padding:9px 11px;margin:8px 0}.item .why{color:var(--mute);font-size:13px;margin:4px 0}
+.tag{font-size:12px;border-radius:10px;padding:1px 8px;background:#eef2f6}
+.empty{color:var(--mute);font-size:14px}a{color:var(--acc)}
+#events-grid{height:360px;width:100%}
+.ag-theme-quartz{--ag-font-size:13px;--ag-grid-size:5px}
+.kind-deny,.kind-halt{color:var(--bad);font-weight:600}
+.kind-needs_approval,.kind-failure,.kind-waiting{color:var(--warn);font-weight:600}
+.kind-paid,.kind-order_created,.kind-approved{color:var(--ok);font-weight:600}
+</style></head><body>
+<header><h1>SpendGuard</h1><span class="sub">Hard limits and stop conditions for AI agents that pay with PayPal</span>
+<span class="badge" id="mode"></span><span class="badge" id="planner"></span></header>
+<main>
+<div>
+ <div class="card"><h2>Try a scenario</h2><div id="scen"></div>
+  <button onclick="post('/api/reset_all')" style="margin-top:6px">Start over</button></div>
+ <div class="card"><h2>Your policy (set by you, not the agent)</h2><div id="policy"></div>
+  <button class="primary" onclick="savePolicy()" style="margin-top:8px">Save policy</button><div id="perr" style="color:var(--bad);font-size:13px"></div></div>
+</div>
+<div>
+ <div id="halt"><b>Agent halted.</b> <span id="haltwhy"></span> <button onclick="post('/api/reset_halt')">Reset (human)</button></div>
+ <div class="card"><h2>Ask the agent</h2><div class="row"><input type="text" id="task" value="buy a desk lamp and 2 mouse" aria-label="task">
+  <button class="primary" onclick="runTask()">Run</button></div>
+  <div style="margin-top:10px"><div id="spent"></div><div class="bar"><i id="spentbar" style="width:0"></i></div></div></div>
+ <div class="card"><h2>Waiting for you</h2><div id="pending"></div></div>
+ <div class="card"><h2>PayPal orders</h2><div id="orders"></div></div>
+ <div class="card"><h2>Audit trail <span style="font-weight:400;text-transform:none;color:var(--mute)">(AG Grid Community &mdash; sort, filter, resize any column)</span></h2>
+  <div id="events-grid" class="ag-theme-quartz"></div></div>
+</div></main>
+<script>
+const $=id=>document.getElementById(id), usd=c=>(c/100).toFixed(2);
+const esc=s=>String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+async function post(p,b){const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});const j=await r.json();await refresh();return j}
+async function runTask(){await post('/api/task',{task:$('task').value})}
+const fields=[['per_order_limit','Per order (USD)',1],['daily_limit','Per day (USD)',1],['per_merchant_daily_limit','Per merchant / day',1],['approval_threshold','Ask me above (USD)',1],['max_price_drift_pct','Max price rise (%)',0],['max_consecutive_failures','Halt after N failures',0]];
+let editing=false;
+async function savePolicy(){const b={};fields.forEach(([k,,m])=>b[k]=$('p_'+k).value);const r=await fetch('/api/policy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});const j=await r.json();$('perr').textContent=j.error||'';editing=false;refresh()}
+
+// --- AG Grid Community: the audit trail is a real grid (sortable, filterable, resizable) instead
+// of a stack of styled <div>s. The data is the same `events` array the server already returns from
+// /api/state (seq, t, kind, message, plus any extra fields a given event carries); no API change.
+let eventsGrid=null;
+function extraCols(ev){
+ const known=new Set(['seq','t','kind','message']);
+ return Object.keys(ev).filter(k=>!known.has(k));
+}
+function buildEventsGrid(sampleEvents){
+ const extra=new Set();
+ sampleEvents.forEach(e=>extraCols(e).forEach(k=>extra.add(k)));
+ const columnDefs=[
+  {field:'seq',headerName:'#',width:56,sortable:true,filter:'agNumberColumnFilter'},
+  {field:'t',headerName:'Time',width:110,sortable:true,filter:'agDateColumnFilter',
+    valueFormatter:p=>new Date(p.value*1000).toLocaleTimeString()},
+  {field:'kind',headerName:'Kind',width:150,sortable:true,filter:'agTextColumnFilter',
+    cellClass:p=>'kind-'+p.value},
+  {field:'message',headerName:'Message',flex:1,minWidth:260,sortable:true,filter:'agTextColumnFilter',wrapText:true,autoHeight:true},
+  ...[...extra].sort().map(k=>({field:k,headerName:k,width:120,sortable:true,filter:true})),
+ ];
+ eventsGrid=agGrid.createGrid($('events-grid'),{
+  columnDefs,
+  rowData:[],
+  defaultColDef:{resizable:true},
+  animateRows:true,
+  rowSelection:'single',
+  overlayNoRowsTemplate:'<span class="empty">Pick a scenario or ask the agent to buy something.</span>',
+ });
+}
+function render(s){
+ $('mode').textContent='PayPal: '+s.mode;$('planner').textContent='Agent brain: '+s.planner;
+ if(!$('scen').children.length)$('scen').innerHTML=Object.entries(s.scenarios).map(([k,v])=>`<button class="scen" onclick="post('/api/scenario',{name:'${k}'})">${esc(v.title)}<small>${esc(v.note)}</small></button>`).join('');
+ if(!editing||!$('policy').children.length)$('policy').innerHTML=fields.map(([k,l,m])=>`<label>${l}<input type="number" step="any" id="p_${k}" value="${m?usd(s.policy[k]):s.policy[k]}" oninput="editing=true"></label>`).join('');
+ $('halt').style.display=s.halted?'block':'none';$('haltwhy').textContent=s.halt_reason;
+ const pct=Math.min(100,100*s.spent_today/Math.max(1,s.policy.daily_limit));
+ $('spent').innerHTML=`Reserved or spent today: <b>${usd(s.spent_today)}</b> of ${usd(s.policy.daily_limit)} USD`;$('spentbar').style.width=pct+'%';
+ const w=s.pending.filter(p=>p.status==='waiting');
+ $('pending').innerHTML=w.length?w.map(p=>`<div class="item"><b>${esc(p.item)}</b> at ${esc(p.merchant)} <span class="tag">${usd(p.total_cents)} USD</span><div class="why">${p.reasons.map(esc).join('<br>')}</div><button class="ok" onclick="post('/api/approve',{id:${p.id}})">Approve</button> <button class="bad" onclick="post('/api/reject',{id:${p.id}})">Reject</button></div>`).join(''):'<div class="empty">Nothing is waiting for you.</div>';
+ $('orders').innerHTML=s.orders.length?s.orders.map(o=>`<div class="item"><b>${esc(o.order_id)}</b> <span class="tag">${esc(o.state)}</span> ${esc(o.item)} at ${esc(o.merchant)}, ${usd(o.total_cents)} USD<div style="margin-top:6px">${o.state==='awaiting_buyer'?(o.approve_url&&s.mode==='sandbox'?`<a href="${esc(o.approve_url)}" target="_blank" rel="noopener">Open PayPal sandbox approval</a> `:'')+(s.mode==='replay'?`<button onclick="post('/api/buyer_approve',{order_id:'${esc(o.order_id)}'})">Buyer approves (replay)</button> `:'')+`<button class="primary" onclick="post('/api/capture',{order_id:'${esc(o.order_id)}'})">Capture</button>`:''}</div></div>`).join(''):'<div class="empty">No orders yet.</div>';
+ const events=s.events.slice().reverse();
+ if(!eventsGrid)buildEventsGrid(events);
+ eventsGrid.setGridOption('rowData',events);
+}
+async function refresh(){try{render(await (await fetch('/api/state')).json())}catch(e){}}
+refresh();setInterval(refresh,1500);
+</script></body></html>
